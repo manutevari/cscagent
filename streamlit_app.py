@@ -6,7 +6,12 @@ import streamlit.components.v1 as components
 
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 from backend.knowledge import ingest_knowledge_source
 from backend.document_extractors import SUPPORTED_FILE_TYPES
