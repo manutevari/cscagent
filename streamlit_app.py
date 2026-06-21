@@ -1,30 +1,63 @@
 import html
 import json
+import sys
+import os
+
+# Configure Python path for imports
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-import sys
-import os
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
-parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Import backend modules with error handling
+try:
+    from backend.knowledge import ingest_knowledge_source
+except ImportError as e:
+    st.error(f"❌ Failed to import knowledge module: {e}")
+    ingest_knowledge_source = None
 
-from backend.knowledge import ingest_knowledge_source
-from backend.document_extractors import SUPPORTED_FILE_TYPES
-from backend.hitl import list_pending_reviews, resolve_review
-from backend.mas_engine import ask
-from backend.guardrails import setting as guardrail_setting
-from backend.voice_assistant import (
-    normalize_voice_language,
-    transcribe_with_whisper,
-    whisper_stt_enabled,
-    synthesize_with_openai,
-    openai_audio_enabled,
-)
+try:
+    from backend.document_extractors import SUPPORTED_FILE_TYPES
+except ImportError as e:
+    st.warning(f"⚠️ Could not load document extractors: {e}")
+    SUPPORTED_FILE_TYPES = ("PDF", "DOCX", "TXT")
+
+try:
+    from backend.hitl import list_pending_reviews, resolve_review
+except ImportError as e:
+    st.warning(f"⚠️ Could not load HITL module: {e}")
+    list_pending_reviews = None
+    resolve_review = None
+
+try:
+    from backend.mas_engine import ask
+except ImportError as e:
+    st.warning(f"⚠️ Could not load MAS engine: {e}")
+    ask = None
+
+try:
+    from backend.guardrails import setting as guardrail_setting
+except ImportError as e:
+    st.warning(f"⚠️ Could not load guardrails: {e}")
+    guardrail_setting = None
+
+try:
+    from backend.voice_assistant import (
+        normalize_voice_language,
+        transcribe_with_whisper,
+        whisper_stt_enabled,
+        synthesize_with_openai,
+        openai_audio_enabled,
+    )
+except ImportError as e:
+    st.warning(f"⚠️ Could not load voice assistant: {e}")
+    normalize_voice_language = None
+    transcribe_with_whisper = None
+    whisper_stt_enabled = None
+    synthesize_with_openai = None
+    openai_audio_enabled = None
 
 try:
     from streamlit_mic_recorder import mic_recorder, speech_to_text
