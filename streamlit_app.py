@@ -2,45 +2,51 @@ import html
 import json
 import sys
 import os
+import logging
 
 # Configure Python path for imports
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+parent_dir = os.path.abspath(os.path.join(BASE_DIR, ".."))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+logging.basicConfig(level=logging.INFO)
 
 # Import backend modules with error handling
 try:
     from backend.knowledge import ingest_knowledge_source
 except ImportError as e:
-    st.error(f"❌ Failed to import knowledge module: {e}")
+    logging.error(f"Failed to import backend.knowledge: {e}")
     ingest_knowledge_source = None
 
 try:
     from backend.document_extractors import SUPPORTED_FILE_TYPES
 except ImportError as e:
-    st.warning(f"⚠️ Could not load document extractors: {e}")
-    SUPPORTED_FILE_TYPES = ("PDF", "DOCX", "TXT")
+    logging.error(f"Failed to import backend.document_extractors: {e}")
+    SUPPORTED_FILE_TYPES = {"pdf": (["pdf"], "PDF"), "docx": (["docx"], "DOCX"), "txt": (["txt"], "TXT")}
 
 try:
     from backend.hitl import list_pending_reviews, resolve_review
 except ImportError as e:
-    st.warning(f"⚠️ Could not load HITL module: {e}")
+    logging.error(f"Failed to import backend.hitl: {e}")
     list_pending_reviews = None
     resolve_review = None
 
 try:
     from backend.mas_engine import ask
 except ImportError as e:
-    st.warning(f"⚠️ Could not load MAS engine: {e}")
+    logging.error(f"Failed to import backend.mas_engine: {e}")
     ask = None
 
 try:
     from backend.guardrails import setting as guardrail_setting
 except ImportError as e:
-    st.warning(f"⚠️ Could not load guardrails: {e}")
+    logging.error(f"Failed to import backend.guardrails: {e}")
     guardrail_setting = None
 
 try:
@@ -52,16 +58,17 @@ try:
         openai_audio_enabled,
     )
 except ImportError as e:
-    st.warning(f"⚠️ Could not load voice assistant: {e}")
-    normalize_voice_language = None
-    transcribe_with_whisper = None
-    whisper_stt_enabled = None
-    synthesize_with_openai = None
-    openai_audio_enabled = None
+    logging.error(f"Failed to import backend.voice_assistant: {e}")
+    normalize_voice_language = lambda lang, text=None: "auto"
+    transcribe_with_whisper = lambda audio, language: (None, "Voice service unavailable")
+    whisper_stt_enabled = lambda: False
+    synthesize_with_openai = lambda content, response_language: (None, "TTS service unavailable")
+    openai_audio_enabled = lambda: False
 
 try:
     from streamlit_mic_recorder import mic_recorder, speech_to_text
-except Exception:
+except ImportError as e:
+    logging.info(f"streamlit_mic_recorder not available: {e}")
     mic_recorder = None
     speech_to_text = None
 
@@ -577,12 +584,58 @@ def _render_header():
     )
 
 
+def _render_quick_prompts():
+    st.markdown("### Quick prompts")
+    cols = st.columns(len(QUICK_PROMPTS))
+    for (label, prompt), col in zip(QUICK_PROMPTS, cols):
+        if col.button(label, use_container_width=True, key=f"quick_prompt_{label}"):
+            return prompt
+        col.caption(prompt)
+    return ""
+
+
 def _render_sidebar():
-    # Sidebar removed per user request. Provide default settings programmatically.
-    side_query = ""
-    cloud_consent = True
-    response_language = "Auto"
-    return cloud_consent, response_language, response_language, side_query
+    with st.sidebar:
+        st.title("Settings")
+        st.markdown("Fine-tune how CSC Mitra responds.")
+        cloud_consent = st.checkbox(
+            "Allow cloud-based response generation",
+            value=st.session_state.get("cloud_consent", True),
+            help="Enable cloud processing for better answer quality.",
+            key="cloud_consent",
+        )
+        response_language = st.selectbox(
+            "Response language",
+            ["Auto", "English", "Hindi"],
+            index=["Auto", "English", "Hindi"].index(
+                st.session_state.get("response_language", "Auto")
+            ),
+            key="response_language",
+        )
+        st.checkbox(
+            "🔊 Voice mode",
+            key="voice_mode",
+            help="Play answers aloud when available.",
+        )
+        st.selectbox(
+            "Voice tone",
+            [
+                "Bhashini (default)",
+                "OpenAI Nova",
+                "Gemini-like (neural)",
+                "Microsoft Copilot (neural)",
+            ],
+            index=[
+                "Bhashini (default)",
+                "OpenAI Nova",
+                "Gemini-like (neural)",
+                "Microsoft Copilot (neural)",
+            ].index(st.session_state.get("tts_voice_choice", "Bhashini (default)")),
+            key="tts_voice_choice",
+        )
+        st.markdown("---")
+        st.markdown("Use the chat box below, or tap any quick prompt card.")
+    return cloud_consent, response_language, response_language, ""
 
 
 def _query_admin_mode():
@@ -849,12 +902,20 @@ def _render_microphone(response_language, voice_mode):
                 key="csc_whisper_recorder",
             )
         if audio:
-            audio_bytes = audio.get("bytes")
-            audio_id = str(audio.get("id") or hash(audio_bytes))
+            # audio may be a dict-like object from the recorder
+            audio_bytes = None
+            if isinstance(audio, dict):
+                audio_bytes = audio.get("bytes")
+                audio_id = str(audio.get("id") or hash(audio_bytes))
+            else:
+                audio_id = str(getattr(audio, "id", hash(audio)))
+            if audio_bytes is None:
+                # nothing to process
+                return
             if audio_id != st.session_state.last_audio_id:
                 st.session_state.last_audio_id = audio_id
                 with st.spinner("Processing your spoken words..."):
-                    transcript, error = transcribe_with_whisper(audio_bytes, voice_language)
+                    transcript, error = transcribe_with_whisper(audio_bytes, language_code)
                 if error:
                     st.session_state.voice_status = ""
                     st.toast("⚠ Voice service busy. Please try again in a few seconds.")
@@ -898,28 +959,19 @@ def _render_composer(response_language, voice_mode):
 
     _render_voice_status()
 
-    st.text_area(
-        "Ask CSC related question",
+    query = st.chat_input(
+        placeholder="Type your CSC question and press Enter...",
         key="chat_draft",
-        placeholder="Ask your CSC related question...",
-        label_visibility="collapsed",
-        height=78,
     )
 
     admin_visible = _admin_attachment_visible()
     if admin_visible:
-        mic_col, spacer_col, attach_col, send_col = st.columns([1, 5.8, 1, 1], vertical_alignment="center")
+        mic_col, send_col, attach_col = st.columns([1, 3, 1], vertical_alignment="center")
     else:
-        mic_col, spacer_col, send_col = st.columns([1, 6.8, 1], vertical_alignment="center")
+        mic_col, send_col = st.columns([1, 3], vertical_alignment="center")
 
     with mic_col:
         _render_microphone(response_language, voice_mode)
-
-    if admin_visible:
-        with attach_col:
-            if st.button("📎", use_container_width=True, key="admin_attachment"):
-                st.session_state.show_ingestion = not st.session_state.show_ingestion
-                st.rerun()
 
     with send_col:
         send_clicked = st.button(
@@ -929,9 +981,15 @@ def _render_composer(response_language, voice_mode):
             disabled=not st.session_state.chat_draft.strip(),
         )
 
+    if admin_visible:
+        with attach_col:
+            if st.button("📎", use_container_width=True, key="admin_attachment"):
+                st.session_state.show_ingestion = not st.session_state.show_ingestion
+                st.rerun()
+
     manual_query = st.session_state.chat_draft.strip() if send_clicked else ""
     voice_query = st.session_state.pop("pending_voice_submit", "")
-    return voice_query or manual_query
+    return voice_query or query or manual_query
 
 
 def _build_answer(query, cloud_consent, response_language, voice_mode):
@@ -965,42 +1023,14 @@ cloud_consent, response_language, voice_language, sidebar_query = _render_sideba
 voice_mode = st.session_state.voice_mode
 _render_header()
 
-# Language and Voice Tone Selectors - Simple and Prominent for Accessibility
-st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
-sel_col1, sel_col2, sel_col3 = st.columns(3, vertical_alignment="center")
-
-with sel_col1:
-    response_language = st.selectbox(
-        "🌐 Language",
-        ["Auto", "English", "Hindi"],
-        index=0,
-        help="Choose response language",
-    )
-
-with sel_col2:
-    voice_tone = st.selectbox(
-        "🎤 Voice Tone",
-        ["Bhashini (default)", "OpenAI Nova", "Gemini-like (neural)", "Microsoft Copilot (neural)"],
-        index=0,
-        key="tts_voice_choice",
-        help="Choose voice type",
-    )
-
-with sel_col3:
-    st.checkbox(
-        "🔊 Voice Mode",
-        key="voice_mode",
-        help="Enable voice responses",
-    )
-    voice_mode = st.session_state.voice_mode
-
-st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
-
-if st.session_state.messages:
-    pass  # Messages will be rendered below
+_init_state()
+_apply_css()
+cloud_consent, response_language, voice_language, sidebar_query = _render_sidebar()
+voice_mode = st.session_state.voice_mode
+_render_header()
+quick_prompt_query = sidebar_query or _render_quick_prompts()
 _render_chat_history(response_language, voice_mode)
-st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
-submitted_query = sidebar_query or _render_composer(response_language, voice_mode)
+submitted_query = quick_prompt_query or _render_composer(response_language, voice_mode)
 _render_ingestion_panel(cloud_consent)
 
 if submitted_query:
