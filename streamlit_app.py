@@ -7,9 +7,9 @@ import streamlit.components.v1 as components
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-#(
+
 from backend.knowledge import ingest_knowledge_source
-from backend.document_extractors import SUPPORTED_FILE_TYPES)
+from backend.document_extractors import SUPPORTED_FILE_TYPES
 from backend.hitl import list_pending_reviews, resolve_review
 from backend.mas_engine import ask
 from backend.guardrails import setting as guardrail_setting
